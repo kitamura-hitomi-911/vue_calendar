@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Vueカレンダー</title>
+    <style type="text/css">
+        .calendar .calendar-main table{
+            width:100%;
+        }
+        .calendar .calendar-main th,
+        .calendar .calendar-main td{
+            border:1px solid #ccc;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<div id="app"></div>
+<script type="text/x-template" id="tmpl-calendar">
+    <div class="calendar">
+        <div class="calendar-ttl">
+            <dl>
+                <dt>{{current.year}}年{{current.month + 1}}月</dt>
+                <dd>
+                    <a href="#" @click.prevent="movePrevMonth" v-if="has_prev_month">前月</a>
+                </dd>
+                <dd>
+                    <a href="#" @click.prevent="moveNextMonth" v-if="has_next_month">次月</a>
+                </dd>
+            </dl>
+        </div>
+        <div class="calendar-main">
+            <table>
+                <thead>
+                <tr>
+                    <th v-for="weekday in weekdays" :key="weekday.num">{{weekday.label}}</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr v-for="week in this.current_calendar">
+                    <td v-for="date_obj in week">
+                        <dl>
+                            <dt>
+                                {{date_obj.date}}
+                            </dt>
+                            <dd>
+                                <p v-for="item in date_obj.items">
+                                    {{item.time}} {{item.text}}
+                                </p>
+                            </dd>
+                        </dl>
+
+                    </td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</script>
+<script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+<script>
+    (function (){
+        "use strict";
+        Vue.component('calendar',{
+            data:function(){
+                return {
+                    current:{
+                        year:'',
+                        month:''
+                    },
+                    weekdays:[
+                        {
+                            num:1,
+                            label:'月'
+                        },
+                        {
+                            num:2,
+                            label:'火'
+                        },
+                        {
+                            num:3,
+                            label:'水'
+                        },
+                        {
+                            num:4,
+                            label:'木'
+                        },
+                        {
+                            num:5,
+                            label:'金'
+                        },
+                        {
+                            num:6,
+                            label:'土'
+                        },
+                        {
+                            num:0,
+                            label:'日'
+                        }
+                    ],
+                    formatted_schedules:[],
+                    calendars:{}
+                }
+            },
+            props:{
+                today:{
+                    type:String,
+                    required: true
+                },
+                schedules:{
+                    type:Array,
+                    required:true
+                }
+            },
+            computed:{
+                /**
+                 * 現在表示するカレンダーの年月を表す文字列
+                 * @return {String}
+                 */
+                current_calendar:function(){
+                    return this.calendars[this.current.year + '-' + this.current.month];
+                },
+                /**
+                 * 日付順にソートされたスケジュールを返す
+                 */
+                sorted_schedule:function(){
+                    return [].concat(this.formatted_schedules).sort(function(a,b){
+                        return a.date > b.date ? 1 : -1;
+                    });
+                },
+                /**
+                 * 日付単位をキー名にしたスケジュールをかえす。
+                 * キーは YYYY-M-D で、 M は Dateオブジェクトにあわせてるので -1
+                 */
+                schedule_by_date:function(){
+                    return this.formatted_schedules.reduce(function(ret,schedule){
+                        let _date_obj = new Date(schedule.date);
+                        let _date_key = _date_obj.getFullYear()+'-'+_date_obj.getMonth() + '-' + _date_obj.getDate();
+                        if(!ret[_date_key]){
+                            ret[_date_key] = [];
+                        }
+                        ret[_date_key].push(schedule);
+                        return ret;
+                    },{});
+                },
+                /**
+                 * 現在の日時の月
+                 * @return {Date}
+                 */
+                now_month:function(){
+                    let now_date = new Date(this.today);
+                    return new Date(now_date.getFullYear(),now_date.getMonth(),1); // yyyy-mm-01 でそろえる
+                },
+                /**
+                 * カレンダー表示期間内の最初の月
+                 * @return {Date}
+                 */
+                start_month:function(){
+                    let start_date = new Date(this.sorted_schedule[0].date);
+                    return new Date(start_date.getFullYear(),start_date.getMonth(),1); // yyyy-mm-01 でそろえる
+                },
+                /**
+                 * カレンダー表示期間内の最後の月
+                 * @return {Date}
+                 */
+                end_month:function(){
+                    let end_date = new Date(this.sorted_schedule[this.sorted_schedule.length-1].date);
+                    return new Date(end_date.getFullYear(),end_date.getMonth(),1); // yyyy-mm-01 でそろえる
+                },
+                /**
+                 * 前の月があるかどうか
+                 * @returns {boolean}
+                 */
+                has_prev_month:function(){
+                    let prev_month = new Date(this.current.year, this.current.month-1,1);
+                    return this.start_month.getTime() <= prev_month.getTime();
+                },
+                /**
+                 * 次の月があるかどうか
+                 * @returns {boolean}
+                 */
+                has_next_month:function(){
+                    let next_month = new Date(this.current.year, this.current.month+1,1);
+                    return this.end_month.getTime() >= next_month.getTime();
+                }
+            },
+            created:function(){
+                // スケジュールデータを整形
+                this.schedules.forEach(function(schedule){
+                    this.formatted_schedules.push(this.formatScheduleData(schedule));
+                },this);
+
+                // 現在表示の月を算出
+                this.setCurrent();
+
+                // 現在表示の月のカレンダーを作成
+                this.createCalender();
+            },
+            template:'#tmpl-calendar',
+            methods:{
+                formatScheduleData:function(schedule){
+                    let _ret = {};
+                    for(var key in schedule){
+                        _ret[key] = schedule[key];
+                    }
+                    let _date_obj = new Date(schedule.date);
+                    let _hour = _date_obj.getHours();
+                    let _minute = _date_obj.getMinutes();
+                    _ret.time = _hour || _minute ? (_hour < 10 ? '0' + _hour : _hour) + ':' + (_minute < 10 ? '0' + _minute : _minute) : '';
+                    console.log(_ret);
+
+
+                    return _ret;
+                },
+                /**
+                 * 現在表示する年月をセット
+                 */
+                setCurrent:function(){
+                    if(this.now_month.getTime() <= this.start_month.getTime()){
+                        this.current.year = this.start_month.getFullYear();
+                        this.current.month = this.start_month.getMonth();
+                    }else if(this.now_month.getTime() >= this.end_month.getTime()){
+                        this.current.year = this.end_month.getFullYear();
+                        this.current.month = this.end_month.getMonth();
+                    }else{
+                        this.current.year = this.now_month.getFullYear();
+                        this.current.month = this.now_month.getMonth();
+                    }
+                },
+                /**
+                 * 次の月を表示する
+                 */
+                moveNextMonth:function(){
+                    let _next_month = new Date(this.current.year,this.current.month+1,1);
+                    this._moveMonth(_next_month.getFullYear(),_next_month.getMonth());
+                },
+                /**
+                 * 前の月を表示する
+                 */
+                movePrevMonth:function(){
+                    let _prev_month = new Date(this.current.year,this.current.month-1,1);
+                    this._moveMonth(_prev_month.getFullYear(),_prev_month.getMonth());
+                },
+                /**
+                 * 指定された月を表示する
+                 * @param {Number} year
+                 * @param {Number} month ※Date オブジェクトにそのまま渡せる月なので、 -1 されたもの
+                 * @private
+                 */
+                _moveMonth:function(year,month){
+                    this.createCalender(year,month);
+                    this.current.year = year;
+                    this.current.month = month;
+                },
+                /**
+                 * 指定された年月のカレンダーを生成
+                 * @param {Number} [tgt_year] 未指定の場合は this.current.year となる
+                 * @param {Number} [tgt_month] 未指定の場合は this.current.month となる
+                 */
+                createCalender:function(tgt_year,tgt_month){
+                    if(tgt_year === void 0 || tgt_month === void 0){
+                        tgt_year = this.current.year;
+                        tgt_month = this.current.month;
+                    }
+                    // カレンダーが作られてなければつくる
+                    let _current_key_name = tgt_year+'-'+tgt_month;
+                    if(!this.calendars[_current_key_name]){
+                        let _weeks = []; // 週毎の配列
+                        let _id = ''; // 個別の日を表すID
+                        let _current_date = 0;// 現在処理中の月の日付(0はまだ開始してないことを表す)
+                        let _is_over_current_month = false; // 現在処理中の月を過ぎたかどうか？
+                        let _next_month_current_date = 1; // 次月の処理中の日付
+                        let _first_day = (new Date(tgt_year,tgt_month, 1)).getDay(); // 現在処理中の月の1日の曜日
+                        let _last_date = (new Date(tgt_year,tgt_month+1, 0)).getDate();// 現在処理中の月の最終日の日付
+                        let _prev_month = new Date(tgt_year,tgt_month-1, 1);
+                        let _next_month = new Date(tgt_year,tgt_month+1, 1);
+                        let _prev_month_current_date = function(_prev_month_last_date_obj,weekdays){ // 現在処理中の月の第1週1日めの前月の日付
+                            return _prev_month_last_date_obj.getDate() - weekdays.reduce(function(ret,weekday,index){
+                                if(weekday.num === _prev_month_last_date_obj.getDay()){
+                                    ret = index;
+                                }
+                                return ret;
+                            },0);
+                        }(new Date(tgt_year,tgt_month, 0), this.weekdays);
+
+                        for(let tmp_week = 1; tmp_week < 7; tmp_week++ ){ // 週は最大6週
+                            if(_is_over_current_month){
+                                break; // その月を過ぎてたら処理終わり
+                            }
+                            _weeks.push([]);
+                            this.weekdays.forEach(function(weekday){
+                                _id = ''; // _id 初期化
+                                if(tmp_week === 1 && _current_date === 0){
+                                    if(_first_day === weekday.num){
+                                        _current_date++; // 始まりの曜日と一致したら開始
+                                        _id = tgt_year+'-'+tgt_month + '-' + _current_date;
+                                    }else{
+                                        _id = _prev_month.getFullYear() + '-' + _prev_month.getMonth() + '-' + _prev_month_current_date;
+                                    }
+                                }else if(_current_date < _last_date){
+                                    _current_date++;
+                                    _id = tgt_year+'-'+tgt_month + '-' + _current_date;
+                                }else if(_is_over_current_month){
+                                    _id = _next_month.getFullYear() + '-' + _next_month.getMonth() + '-' + _next_month_current_date;
+                                }
+
+                                // 該当の日付のスケジュールがあれば追加
+                                let _items = this.schedule_by_date[_id] ? this.schedule_by_date[_id] : [];
+
+                                _weeks[_weeks.length-1].push(
+                                    {
+                                        id:_id,
+                                        weekday:weekday,
+                                        date: _current_date === 0 ? _prev_month_current_date++ : (_is_over_current_month ? _next_month_current_date++ : _current_date),
+                                        out_of_current_month: _current_date === 0 || _is_over_current_month,
+                                        items:_items
+                                    }
+                                );
+
+                                // 最後に現在処理中の月を完了したかチェック
+                                if(_current_date >= _last_date){
+                                    _is_over_current_month = true;
+                                }
+
+                                if(!_id){
+                                    console.error(_id, '_id が空ってどういうこと？')
+                                }
+                            },this);
+                        }
+                        this.$set(this.calendars, _current_key_name, _weeks)
+                    }
+                }
+            }
+        });
+
+        new Vue({
+            el:'#app',
+            data:{
+                today:'2021/02/11',
+                schedules:[
+                    {
+                        date:'2021/02/01 00:00:00',
+                        text:'〇 vs 〇'
+                    },
+                    {
+                        date:'2021/02/01 00:30:00',
+                        text:'〇 vs 〇'
+                    },
+                    {
+                        date:'2021/02/01 09:05:00',
+                        text:'〇 vs 〇'
+                    },
+                    {
+                        date:'2021/02/21 20:00:00',
+                        text:'〇 vs 〇'
+                    },
+                    {
+                        date: '2020/12/05 18:00:00',
+                        text: '〇 vs 〇'
+                    },
+                    {
+                        date:'2020/12/05 19:00:00',
+                        text:'〇 vs 〇'
+                    },
+                    {
+                        date:'2020/12/05 20:00:00',
+                        text:'〇 vs 〇'
+                    },
+                    {
+                        date:'2021/01/05 20:00:00',
+                        text:'〇 vs 〇'
+                    },
+                ]
+            },
+            template:'<calendar :schedules="schedules" :today="today"></calendar>'
+        });
+
+
+    })();
+</script>
+</body>
+</html>
